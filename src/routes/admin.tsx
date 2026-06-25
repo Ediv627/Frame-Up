@@ -37,6 +37,7 @@ import {
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/admin")({
+  head: () => ({ meta: [{ title: "لوحة الأدمن — FRAME UP" }] }),
   component: AdminPage,
 });
 
@@ -678,6 +679,7 @@ type AdminOrder = {
   customer_name: string;
   customer_phone: string;
   city: string;
+  whatsapp_confirmed: boolean;
 };
 
 type OrderItem = {
@@ -698,7 +700,7 @@ function OrdersTab() {
     setLoading(true);
     supabase
       .from("orders")
-      .select("id, created_at, status, total, customer_name, customer_phone, city")
+      .select("id, created_at, status, total, customer_name, customer_phone, city, whatsapp_confirmed")
       .order("created_at", { ascending: false })
       .then(({ data }) => {
         setOrders((data as AdminOrder[]) ?? []);
@@ -717,6 +719,19 @@ function OrdersTab() {
       toast.error("فشل التحديث");
     } else {
       toast.success("تم التحديث");
+      reload();
+    }
+  };
+
+  const confirmWhatsapp = async (id: string) => {
+    const { error } = await supabase
+      .from("orders")
+      .update({ whatsapp_confirmed: true, status: "confirmed" })
+      .eq("id", id);
+    if (error) {
+      toast.error("فشل التأكيد");
+    } else {
+      toast.success("تم تأكيد استلام رسالة الواتساب");
       reload();
     }
   };
@@ -742,7 +757,7 @@ function OrdersTab() {
           <p className="text-sm text-muted-foreground">لا توجد طلبات حتى الآن</p>
         </div>
       ) : (
-        <div className="rounded-lg border border-border overflow-hidden">
+        <div className="rounded-lg border border-border overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-secondary/40 text-xs">
               <tr>
@@ -752,6 +767,7 @@ function OrdersTab() {
                 <Th>المدينة</Th>
                 <Th>الإجمالي</Th>
                 <Th>الحالة</Th>
+                <Th>واتساب</Th>
                 <Th>عرض</Th>
                 <Th>حذف</Th>
               </tr>
@@ -760,7 +776,7 @@ function OrdersTab() {
               {orders.map((o) => (
                 <tr key={o.id} className="border-t border-border">
                   <Td>
-                    <span className="font-mono text-xs">#{o.id.slice(0, 8).toUpperCase()}</span>
+                    <span className="font-mono text-sm font-bold tracking-widest">{(o as any).order_code ?? `#${o.id.slice(0, 8).toUpperCase()}`}</span>
                   </Td>
                   <Td>{new Date(o.created_at).toLocaleDateString("ar-EG")}</Td>
                   <Td>
@@ -781,6 +797,21 @@ function OrdersTab() {
                       <option value="delivered">تم التوصيل</option>
                       <option value="cancelled">ملغي</option>
                     </select>
+                  </Td>
+                  <Td>
+                    {o.whatsapp_confirmed ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-green-500/10 text-green-700 dark:text-green-400 px-2 py-1 text-xs font-medium whitespace-nowrap">
+                        ✅ مؤكد
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => confirmWhatsapp(o.id)}
+                        className="rounded-full border border-border bg-background px-3 py-1 text-xs hover:bg-secondary whitespace-nowrap"
+                        title="تأكيد استلام رسالة الواتساب من العميل"
+                      >
+                        تأكيد الواتساب
+                      </button>
+                    )}
                   </Td>
                   <Td>
                     <button
@@ -820,7 +851,7 @@ function OrderDetailDialog({ order, onClose }: { order: AdminOrder; onClose: () 
       supabase.from("orders").select("*").eq("id", order.id).single(),
       supabase.from("order_items").select("*").eq("order_id", order.id),
     ]).then(([orderRes, itemsRes]) => {
-      setDetails(orderRes.data as Record<string, string | number | null>);
+      setDetails(orderRes.data as unknown as Record<string, string | number | null>);
       setItems((itemsRes.data as OrderItem[]) ?? []);
     });
   }, [order.id]);
@@ -829,7 +860,7 @@ function OrderDetailDialog({ order, onClose }: { order: AdminOrder; onClose: () 
     <div className="fixed inset-0 z-50 bg-foreground/40 backdrop-blur-sm flex items-center justify-center p-4 overflow-auto">
       <div className="bg-background rounded-xl border border-border max-w-2xl w-full my-8 max-h-[90vh] overflow-auto">
         <div className="sticky top-0 bg-background border-b border-border px-6 py-4 flex items-center justify-between">
-          <p className="font-semibold">تفاصيل الطلب #{order.id.slice(0, 8).toUpperCase()}</p>
+          <p className="font-semibold">تفاصيل الطلب <span className="font-mono tracking-widest">{(order as any).order_code ?? `#${order.id.slice(0, 8).toUpperCase()}`}</span></p>
           <button
             onClick={onClose}
             className="h-8 w-8 rounded-full hover:bg-secondary inline-flex items-center justify-center"
@@ -1088,14 +1119,7 @@ function SubTabBtn({
   );
 }
 
-type TaxRow = {
-  id: string;
-  slug: string;
-  name_ar: string;
-  sort_order: number;
-  hex?: string;
-  image_url?: string | null;
-};
+type TaxRow = { id: string; slug: string; name_ar: string; sort_order: number; hex?: string; image_url?: string | null };
 
 function TaxonomyList({ kind }: { kind: TaxKind }) {
   const [rows, setRows] = useState<TaxRow[]>([]);
@@ -1428,18 +1452,20 @@ function ContactTab() {
   const save = async () => {
     setSaving(true);
     const cleanPhone = phone.replace(/\D/g, "");
-    const { error } = await (supabase as any).from("site_settings").upsert(
-      [
-        { key: "whatsapp_phone", value: cleanPhone },
-        { key: "whatsapp_message", value: message },
-        { key: "contact_email", value: contactEmail },
-        { key: "contact_phone", value: contactPhone },
-        { key: "contact_address", value: contactAddress },
-        { key: "social_facebook", value: facebook },
-        { key: "social_instagram", value: instagram },
-      ],
-      { onConflict: "key" },
-    );
+    const { error } = await (supabase as any)
+      .from("site_settings")
+      .upsert(
+        [
+          { key: "whatsapp_phone", value: cleanPhone },
+          { key: "whatsapp_message", value: message },
+          { key: "contact_email", value: contactEmail },
+          { key: "contact_phone", value: contactPhone },
+          { key: "contact_address", value: contactAddress },
+          { key: "social_facebook", value: facebook },
+          { key: "social_instagram", value: instagram },
+        ],
+        { onConflict: "key" },
+      );
     setSaving(false);
     if (error) {
       toast.error("فشل الحفظ: " + error.message);
@@ -1483,9 +1509,7 @@ function ContactTab() {
         </label>
 
         <label className="block">
-          <span className="text-xs text-muted-foreground block mb-2">
-            الرسالة الافتراضية (اختياري)
-          </span>
+          <span className="text-xs text-muted-foreground block mb-2">الرسالة الافتراضية (اختياري)</span>
           <textarea
             value={message}
             onChange={(e) => setMessage(e.target.value)}
